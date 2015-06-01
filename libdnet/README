@@ -1,0 +1,11 @@
+This version's firewall API is for "pf" only.(OpenBSD, MAC OSX, iOS, etc...)
+I add three header, pfvar.h, radix.h, tree.h respectively in "libdnet/include".
+File: src/fw-*.c are the same as fw-pf.c.
+***Notice line 15-20***
+15    #define PRIVATE
+16    #include <net/if.h>
+17    #include <netinet/in.h>
+18    #include "pfvar.h"
+19    #define port xport.range.port
+20    #define port_op xport.range.op
+This is just for compile.
