@@ -18,11 +18,3 @@ profile
 DerivedData
 *.hmap
 *.xccheckout
-
-# CocoaPods
-Pods
-
-# iOSOpenDev
-Packages
-LatestBuild
-

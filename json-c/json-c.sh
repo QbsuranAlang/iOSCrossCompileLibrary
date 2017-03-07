@@ -2,68 +2,43 @@
 #  Automatic build script for json-c
 #  for iPhoneOS and iPhoneSimulator
 #
-#  Created by Qbsuran Alang 2015.01.18
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#  http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
-#  origin script from: https://github.com/chrisballinger/openvpn-server-ios/blob/master/build-libpcap.sh
-###########################################################################
-#  Change values here													  #
-#																		  #
 LIBNAME="json-c"
-VERSION="0.12"
-OUTPUT_LIBS="libjson-c.a"
-MINIOSVERSION="6.0"
-#																		  #
-###########################################################################
-#																		  #
-# Don't change anything under this line!								  #
-#																		  #
-###########################################################################
+MINIOSVERSION="7.0"
 
+# variables
 ARCHS="i386 x86_64 armv7 armv7s arm64"
 
 DEVELOPER=`xcode-select -print-path`
-#DEVELOPER="/Applications/Xcode.app/Contents/Developer"
 SDKVERSION=`xcrun -sdk iphoneos --show-sdk-version`
 
 REPOROOT=$(pwd)
 
-OUTPUTDIR="${REPOROOT}/dependencies"
-mkdir -p ${OUTPUTDIR}/iPhoneOS/include
-mkdir -p ${OUTPUTDIR}/lib
+DEPSDIR="${REPOROOT}/dependencies"
+mkdir -p ${DEPSDIR}
 
 BUILDDIR="${REPOROOT}/build"
 INTERDIR="${BUILDDIR}/built"
 mkdir -p $BUILDDIR
 mkdir -p $INTERDIR
 
+LOG=${REPOROOT}/log.txt
+
+# download
 set -e
 if [ ! -e "${LIBNAME}" ]; then
 echo "Downloading ${LIBNAME}"
-git clone https://github.com/json-c/json-c
+git clone https://github.com/json-c/json-c.git ${LIBNAME}
 fi
-echo "Using ${LIBNAME}-${VERSION}"
+echo "Using ${LIBNAME} from github"
 cd ${LIBNAME}
 set +e
 
-sh autogen.sh
+# bootstrap
+echo "Bootstrapping..."
+sh autogen.sh >> ${LOG} 2>&1
 
-CCACHE=`which ccache `
-set -e # back to regular "bail out on error" mode
-
-for ARCH in ${ARCHS}
-do
+# start compiling
+for ARCH in ${ARCHS} ;do
 if [ "${ARCH}" == "i386" ] || [ "${ARCH}" == "x86_64" ] ; then
 PLATFORM="iPhoneSimulator"
 EXTRA_CONFIG="--host ${ARCH}-apple-darwin"
@@ -77,46 +52,68 @@ EXTRA_LDFLAGS=""
 fi
 
 mkdir -p "${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
+echo "Configuring ${PLATFORM}${SDKVERSION}-${ARCH}..."
+./configure \
+    --disable-shared \
+    ${EXTRA_CONFIG} \
+    --prefix="${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" \
+    CC="${DEVELOPER}/usr/bin/gcc -Wno-macro-redefined" \
+    LDFLAGS="$LDFLAGS ${EXTRA_LDFLAGS} -arch ${ARCH} -fPIE -miphoneos-version-min=${MINIOSVERSION}" \
+    CFLAGS="$CFLAGS ${EXTRA_CFLAGS} -g -O0 -D__APPLE_USE_RFC_3542 -arch ${ARCH} -fPIE -miphoneos-version-min=${MINIOSVERSION} -isysroot ${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer/SDKs/${PLATFORM}${SDKVERSION}.sdk" \
+    >> ${LOG} 2>&1
 
-./configure --disable-shared ${EXTRA_CONFIG} \
---prefix="${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" \
-CC="${CCACHE}${DEVELOPER}/usr/bin/gcc" \
-LDFLAGS="$LDFLAGS -arch ${ARCH} -fPIE -miphoneos-version-min=${MINIOSVERSION} ${EXTRA_LDFLAGS}" \
-CFLAGS="$CFLAGS -g -O0 -D__APPLE_USE_RFC_3542 -arch ${ARCH} -fPIE -miphoneos-version-min=${MINIOSVERSION} ${EXTRA_CFLAGS} -I${OUTPUTDIR}/${PLATFORM}/include -isysroot ${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer/SDKs/${PLATFORM}${SDKVERSION}.sdk"
+echo "Compiling ${PLATFORM}${SDKVERSION}-${ARCH}..."
+make -j 4 >> ${LOG} 2>&1
+echo $"Installing ${PLATFORM}${SDKVERSION}-${ARCH}..."
+make -j 4 install >> ${LOG} 2>&1
 
-make -j2
-make install
-
-make clean
+make clean >/dev/null
 done
+
+echo "Compiling is done."
 
 ########################################
+# archive files
 
-echo "Build library..."
+function lipo_fat() {
+    LIPO_ARGS=" -create "
+    for ARCH in ${ARCHS} ;do
 
-mkdir -p ${REPOROOT}/lib
-LIPOCMD=" -create "
-for ARCH in ${ARCHS}
-do
-if [ "${ARCH}" == "i386" ] || [ "${ARCH}" == "x86_64" ]; then
-PLATFORM="iPhoneSimulator"
-else
-PLATFORM="iPhoneOS"
-fi
-INPUT_ARCH_LIB="${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk/lib/${OUTPUT_LIB}/${OUTPUT_LIBS}"
-LIPOCMD="${LIPOCMD} -arch ${ARCH} ${INPUT_ARCH_LIB} "
-done
-LIPOCMD="${LIPOCMD} -output ${REPOROOT}/lib/${OUTPUT_LIBS}"
+    if [ "${ARCH}" == "i386" ] || [ "${ARCH}" == "x86_64" ]; then
+    PLATFORM="iPhoneSimulator"
+    else
+    PLATFORM="iPhoneOS"
+    fi
 
-lipo $LIPOCMD
+    INPUT_ARCH_LIB="${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk/$1"
+    LIPO_ARGS="${LIPO_ARGS} -arch ${ARCH} ${INPUT_ARCH_LIB} "
 
-echo "Building done."
-if [ "$1" == "reserve" ]; then
-echo "Reserve build file."
-else
+    done
+
+    LIPO_ARGS="${LIPO_ARGS} -output ${TARGET}/$1"
+    lipo ${LIPO_ARGS}
+}
+
+function copy_file() {
+    cp -R ${INTERDIR}/iPhoneOS${SDKVERSION}-arm64.sdk/$1 ${TARGET}/$1
+}
+
+function copy_dir() {
+    cp -R ${INTERDIR}/iPhoneOS${SDKVERSION}-arm64.sdk/$1 ${TARGET}/
+}
+
+echo "Archiving..."
+TARGET=${REPOROOT}/target
+mkdir -p ${TARGET}
+mkdir -p ${TARGET}/lib
+mkdir -p ${TARGET}/include
+
+lipo_fat "lib/libjson-c.a"
+copy_dir "include"
+
 echo "Cleaning up..."
-rm -fr ${BUILDDIR}
-rm -rf ${OUTPUTDIR}
+rm -rf ${BUILDDIR}
+rm -rf ${DEPSDIR}
 rm -rf ${REPOROOT}/${LIBNAME}
-fi
 echo "Done."
+echo "Built here: "${TARGET}

@@ -1,71 +1,46 @@
 #!/bin/bash
-#  Automatic build script for curl
+#  Automatic build script for curl and libcurl
 #  for iPhoneOS and iPhoneSimulator
 #
-#  Created by Qbsuran Alang 2015.01.18
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#  http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-#
-#  origin script from: https://github.com/chrisballinger/openvpn-server-ios/blob/master/build-libpcap.sh
-###########################################################################
-#  Change values here													  #
-#																		  #
 LIBNAME="curl"
-VERSION="7.40.0"
-OUTPUT_LIBS="libcurl.a"
-MINIOSVERSION="6.0"
-#																		  #
-###########################################################################
-#																		  #
-# Don't change anything under this line!								  #
-#																		  #
-###########################################################################
+VERSION="7.53.1"
+MINIOSVERSION="7.0"
 
+# variables
 ARCHS="i386 x86_64 armv7 armv7s arm64"
 
 DEVELOPER=`xcode-select -print-path`
-#DEVELOPER="/Applications/Xcode.app/Contents/Developer"
 SDKVERSION=`xcrun -sdk iphoneos --show-sdk-version`
 
 REPOROOT=$(pwd)
 
-OUTPUTDIR="${REPOROOT}/dependencies"
-mkdir -p ${OUTPUTDIR}/lib
+DEPSDIR="${REPOROOT}/dependencies"
+mkdir -p ${DEPSDIR}
 
 BUILDDIR="${REPOROOT}/build"
 INTERDIR="${BUILDDIR}/built"
-mkdir -p $BUILDDIR
-mkdir -p $INTERDIR
+mkdir -p ${BUILDDIR}
+mkdir -p ${INTERDIR}
 
 SRCDIR="${BUILDDIR}/src"
-mkdir -p $SRCDIR
+mkdir -p ${SRCDIR}
 
+LOG=${REPOROOT}/log.txt
+
+# download or use existed
 set -e
 if [ ! -e "${SRCDIR}/${LIBNAME}-${VERSION}.tar.gz" ]; then
 cd ${SRCDIR}
 echo "Downloading ${LIBNAME}-${VERSION}.tar.gz"
-curl -O http://curl.haxx.se/download/${LIBNAME}-${VERSION}.tar.gz
+/usr/bin/curl -L -O http://curl.haxx.se/download/${LIBNAME}-${VERSION}.tar.gz >/dev/null
 fi
 echo "Using ${LIBNAME}-${VERSION}.tar.gz"
-tar zxf ${SRCDIR}/${LIBNAME}-${VERSION}.tar.gz -C ${SRCDIR}
+tar zxf ${SRCDIR}/${LIBNAME}-${VERSION}.tar.gz -C ${SRCDIR} >> ${LOG} 2>&1
 cd "${SRCDIR}/${LIBNAME}-${VERSION}"
 set +e
 
-CCACHE=`which ccache `
-set -e # back to regular "bail out on error" mode
-
-for ARCH in ${ARCHS}
-do
+# start compiling
+for ARCH in ${ARCHS} ;do
 if [ "${ARCH}" == "i386" ] || [ "${ARCH}" == "x86_64" ] ; then
 PLATFORM="iPhoneSimulator"
 EXTRA_CONFIG="--host ${ARCH}-apple-darwin"
@@ -79,44 +54,75 @@ EXTRA_LDFLAGS=""
 fi
 
 mkdir -p "${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk"
-./configure --disable-shared --enable-static --enable-threaded-resolver --with-darwinssl ${EXTRA_CONFIG} \
---prefix="${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" \
-CC="${CCACHE}${DEVELOPER}/usr/bin/gcc" \
-LDFLAGS="$LDFLAGS -arch ${ARCH} -fPIE -miphoneos-version-min=${MINIOSVERSION} ${EXTRA_LDFLAGS}" \
-CFLAGS="$CFLAGS -g -O0 -D__APPLE_USE_RFC_3542 -arch ${ARCH} -fPIE -miphoneos-version-min=${MINIOSVERSION} ${EXTRA_CFLAGS} -isysroot ${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer/SDKs/${PLATFORM}${SDKVERSION}.sdk"
+echo "Configuring ${PLATFORM}${SDKVERSION}-${ARCH}..."
+./configure \
+    --disable-shared \
+    --enable-static \
+    --enable-threaded-resolver \
+    --with-darwinssl \
+    ${EXTRA_CONFIG} \
+    --prefix="${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk" \
+    CC="${DEVELOPER}/usr/bin/gcc" \
+    LDFLAGS="$LDFLAGS ${EXTRA_LDFLAGS} -arch ${ARCH} -fPIE -miphoneos-version-min=${MINIOSVERSION} " \
+    CFLAGS="$CFLAGS ${EXTRA_CFLAGS} -g -O0 -D__APPLE_USE_RFC_3542 -arch ${ARCH} -fPIE -miphoneos-version-min=${MINIOSVERSION} -isysroot ${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer/SDKs/${PLATFORM}${SDKVERSION}.sdk" \
+    >> ${LOG} 2>&1
 
-make -j2
-make install
+echo "Compiling ${PLATFORM}${SDKVERSION}-${ARCH}..."
+make -j 4 >> ${LOG} 2>&1
+echo $"Installing ${PLATFORM}${SDKVERSION}-${ARCH}..."
+make -j 4 install >> ${LOG} 2>&1
 
-make clean
+make clean >/dev/null
 done
+
+echo "Compiling is done."
 
 ########################################
+# archive files
 
-echo "Build library..."
+function lipo_fat() {
+    LIPO_ARGS=" -create "
+    for ARCH in ${ARCHS} ;do
 
-mkdir -p ${REPOROOT}/lib
-LIPOCMD=" -create "
-for ARCH in ${ARCHS}
-do
-if [ "${ARCH}" == "i386" ] || [ "${ARCH}" == "x86_64" ]; then
-PLATFORM="iPhoneSimulator"
-else
-PLATFORM="iPhoneOS"
-fi
-INPUT_ARCH_LIB="${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk/lib/${OUTPUT_LIB}/${OUTPUT_LIBS}"
-LIPOCMD="${LIPOCMD} -arch ${ARCH} ${INPUT_ARCH_LIB} "
-done
-LIPOCMD="${LIPOCMD} -output ${REPOROOT}/lib/${OUTPUT_LIBS}"
+    if [ "${ARCH}" == "i386" ] || [ "${ARCH}" == "x86_64" ]; then
+    PLATFORM="iPhoneSimulator"
+    else
+    PLATFORM="iPhoneOS"
+    fi
 
-lipo $LIPOCMD
+    INPUT_ARCH_LIB="${INTERDIR}/${PLATFORM}${SDKVERSION}-${ARCH}.sdk/$1"
+    LIPO_ARGS="${LIPO_ARGS} -arch ${ARCH} ${INPUT_ARCH_LIB} "
 
-echo "Building done."
-if [ "$1" == "reserve" ]; then
-echo "Reserve build file."
-else
+    done
+
+    LIPO_ARGS="${LIPO_ARGS} -output ${TARGET}/$1"
+    lipo ${LIPO_ARGS}
+}
+
+function copy_file() {
+    cp -R ${INTERDIR}/iPhoneOS${SDKVERSION}-arm64.sdk/$1 ${TARGET}/$1
+}
+
+function copy_dir() {
+    cp -R ${INTERDIR}/iPhoneOS${SDKVERSION}-arm64.sdk/$1 ${TARGET}/
+}
+
+echo "Archiving..."
+
+TARGET=${REPOROOT}/target
+mkdir -p ${TARGET}
+mkdir -p ${TARGET}/bin
+mkdir -p ${TARGET}/include
+mkdir -p ${TARGET}/lib
+mkdir -p ${TARGET}/share
+
+lipo_fat "bin/curl"
+cp -R ${REPOROOT}/include-for-ios/curl ${TARGET}/include/
+lipo_fat "lib/libcurl.a"
+copy_dir "share"
+
 echo "Cleaning up..."
-rm -fr ${BUILDDIR}
-rm -rf ${OUTPUTDIR}
-fi
+rm -rf ${BUILDDIR}
+rm -rf ${DEPSDIR}
 echo "Done."
+echo "Built here: "${TARGET}
